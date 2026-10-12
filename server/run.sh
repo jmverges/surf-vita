@@ -6,4 +6,10 @@ export SURF_PUBLIC_ADDRESS="${SURF_PUBLIC_ADDRESS:-192.168.1.63:18080}"
 export CHROME="${CHROME:-$PWD/chrome-wrapper.sh}"
 # Surf 0.17.0 + vita-fixes (patches/): unrotated landscape, view re-applied on fullscreen,
 # window sized for the page area (headless Chromium's toolbar is inside the window).
-exec ./surf-vita-patched serve
+# Chromium sometimes dies on the first start after a restart ("browser connection
+# lost"): start again, but stop after a clean `surf quit` (exit 0).
+for attempt in 1 2 3 4 5; do
+  ./surf-vita-patched serve && exit 0
+  echo "run.sh: surf exited ($?), restart $attempt" >&2
+  sleep 3
+done

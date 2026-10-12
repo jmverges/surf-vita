@@ -9,6 +9,7 @@
 #include <psp2/sysmodule.h>
 #include <psp2/system_param.h>
 #include <psp2/touch.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -397,7 +398,12 @@ static uint64_t g_last_wheel_us;
 static struct {
   int active, vita_id, dragging;
   float x0, y0, x, y, sent_x, sent_y;
+  float vx, vy;     /* recent wheel speed, CSS px per INPUT_INTERVAL_US */
+  int flinging;     /* inertia after the finger lifts */
 } g_tap;
+
+#define FLING_FRICTION 0.92f /* per step (60 Hz): about half a second to stop */
+#define FLING_MIN 0.5f       /* px per step below which it stops */
 
 #define DRAG_THRESHOLD 0.02f /* of the screen: ~19 px horizontally */
 
@@ -418,6 +424,7 @@ static void handle_touch(uint64_t now) {
       g_tap.active = 1;
       g_tap.vita_id = td.report[r].id;
       g_tap.dragging = 0;
+      g_tap.vx = g_tap.vy = 0;
       g_tap.x0 = g_tap.x = g_tap.sent_x = x;
       g_tap.y0 = g_tap.y = g_tap.sent_y = y;
       found = 1;
@@ -433,18 +440,31 @@ static void handle_touch(uint64_t now) {
 
   if (g_tap.active && !found) { /* finger lifted */
     if (!g_tap.dragging) sv_click(g_tap.x0, g_tap.y0);
+    else g_tap.flinging = 1; /* keep going with the last speed, then slow down */
     g_tap.active = 0;
     return;
   }
-  if (!g_tap.active) return;
+  if (!g_tap.active) {
+    if (g_tap.flinging && now - g_last_touch_move_us >= INPUT_INTERVAL_US) {
+      g_tap.vx *= FLING_FRICTION;
+      g_tap.vy *= FLING_FRICTION;
+      if (fabsf(g_tap.vx) < FLING_MIN && fabsf(g_tap.vy) < FLING_MIN) g_tap.flinging = 0;
+      else sv_wheel(g_tap.x, g_tap.y, g_tap.vx, g_tap.vy);
+      g_last_touch_move_us = now;
+    }
+    return;
+  }
+  g_tap.flinging = 0; /* a new touch stops the inertia */
 
   float dx = g_tap.x - g_tap.x0, dy = g_tap.y - g_tap.y0;
   if (!g_tap.dragging && (dx * dx + dy * dy) > DRAG_THRESHOLD * DRAG_THRESHOLD) g_tap.dragging = 1;
   if (g_tap.dragging && now - g_last_touch_move_us >= INPUT_INTERVAL_US) {
-    /* Content follows the finger. Measured on the Vita (12-oct): the backend's
-     * wheel scrolls opposite to the finger's travel, so the delta is the
-     * finger's own movement. */
-    float wx = (g_tap.x - g_tap.sent_x) * SCREEN_W, wy = (g_tap.y - g_tap.sent_y) * SCREEN_H;
+    /* Content follows the finger: a positive wheel delta scrolls the page
+     * down (checked with the D-pad), so moving the finger up sends one. */
+    float wx = (g_tap.sent_x - g_tap.x) * SCREEN_W, wy = (g_tap.sent_y - g_tap.y) * SCREEN_H;
+    /* Smoothed speed for the inertia when the finger lifts. */
+    g_tap.vx = 0.6f * wx + 0.4f * g_tap.vx;
+    g_tap.vy = 0.6f * wy + 0.4f * g_tap.vy;
     if (wx != 0 || wy != 0) {
       sv_wheel(g_tap.x, g_tap.y, wx, wy);
       g_tap.sent_x = g_tap.x;
