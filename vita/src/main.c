@@ -677,9 +677,28 @@ int main(void) {
     /* The hardware decoder outputs a picture only after a few more AUs; on a
      * static page none come, so nudge the backend for keyframes until the
      * latest picture is out. */
-    if (app == APP_RUN && dec_pending > 0 &&
-        sceKernelGetProcessTimeWide() - dec_last_au_us > 120000)
-      sv_request_keyframe();
+    {
+      /* When the stream goes quiet, remember the newest AU and nudge until a
+       * picture of it (or a later one) is out: the pictures still inside the
+       * decoder are older than what the page shows now. */
+      static int catching_up;
+      static uint32_t target;
+      int idle = sceKernelGetProcessTimeWide() - dec_last_au_us > 120000;
+      if (app != APP_RUN || !idle) {
+        catching_up = 0;
+      } else {
+        if (!catching_up) {
+          catching_up = 1;
+          target = dec_last_submitted_seq;
+        }
+        if (catching_up == 1) {
+          int32_t behind = (int32_t)(target - dec_last_output_seq);
+          int nothing_out = dec_last_output_seq == 0; /* no picture yet */
+          if (nothing_out || (behind > 0 && behind < 64)) sv_request_keyframe(); /* rate limited */
+          else catching_up = 2; /* caught up (or a new stream): stop nudging */
+        }
+      }
+    }
     g_render_frames++;
     vita2d_start_drawing();
     vita2d_clear_screen();

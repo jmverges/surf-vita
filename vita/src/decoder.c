@@ -168,6 +168,8 @@ static int pick_free_slot_locked(void) {
 }
 
 volatile int dec_in_decode;
+volatile uint32_t dec_last_submitted_seq; /* newest AU given to the decoder */
+volatile uint32_t dec_last_output_seq;    /* AU of the newest picture out */
 volatile int dec_pending;                 /* AUs decoded with no picture out yet */
 volatile unsigned long long dec_last_au_us; /* when the last AU reached the decoder */
 volatile int dec_lowdelay_ret = 1; /* debug: result of the low-delay call */
@@ -234,8 +236,11 @@ static void *decoder_thread(void *arg) {
 
     au.es.pBuf = it.data;
     au.es.size = it.len;
-    au.pts.upper = au.pts.lower = 0xFFFFFFFF;
-    au.dts.upper = au.dts.lower = 0xFFFFFFFF;
+    /* The AU's sequence rides along as its timestamp, so each output picture
+     * says which AU it is (the decoder holds several back). */
+    au.pts.upper = au.dts.upper = 0;
+    au.pts.lower = au.dts.lower = it.sequence;
+    dec_last_submitted_seq = it.sequence;
 
     dec_last_au_us = sceKernelGetProcessTimeWide();
     dec_in_decode = 1;
@@ -263,6 +268,8 @@ static void *decoder_thread(void *arg) {
         uint32_t out_seq = seq_fifo[0];
         memmove(seq_fifo, seq_fifo + 1, (size_t)(seq_n - 1) * sizeof(uint32_t));
         seq_n--;
+        if (picture.info.pts.upper == 0) out_seq = picture.info.pts.lower; /* exact */
+        dec_last_output_seq = out_seq;
         out->width = it.width;
         out->height = it.height;
         out->sequence = out_seq;

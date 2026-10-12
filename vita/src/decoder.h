@@ -49,6 +49,7 @@ void dec_get_stats(dec_stats *out);
 
 extern volatile int dec_in_decode;
 extern volatile int dec_pending;
+extern volatile uint32_t dec_last_submitted_seq, dec_last_output_seq;
 extern volatile unsigned long long dec_last_au_us;
 extern volatile int dec_lowdelay_ret;
 
