@@ -683,7 +683,7 @@ int main(void) {
        * decoder are older than what the page shows now. */
       static int catching_up;
       static uint32_t target;
-      int idle = sceKernelGetProcessTimeWide() - dec_last_au_us > 120000;
+      int idle = sceKernelGetProcessTimeWide() - dec_last_au_us > 50000;
       if (app != APP_RUN || !idle) {
         catching_up = 0;
       } else {

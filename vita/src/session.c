@@ -859,7 +859,7 @@ static int handle_input(sv_conn_state *s, sv_input *in) {
   case SV_IN_KEYFRAME: { /* the app's decoder is holding pictures back */
     uint64_t now = sv_now_ns();
     if (!s->cap_reqkeyframe || s->paused) break;
-    if (s->last_keyframe_request_ns && now - s->last_keyframe_request_ns < 100000000ull) break;
+    if (s->last_keyframe_request_ns && now - s->last_keyframe_request_ns < 30000000ull) break;
     s->last_keyframe_request_ns = now;
     r = send_simple(s, SURF_PROTOCOL_COMMAND_REQUEST_KEYFRAME);
     break;
