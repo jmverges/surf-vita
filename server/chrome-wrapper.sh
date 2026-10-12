@@ -1,4 +1,5 @@
 #!/bin/bash
-# Headless Chromium assumes an 800x600 screen and squeezes the 960x544 window.
-# (the page rendered 960x401 and the Vita got black bars). Give it a larger screen.
-exec /home/jmverges/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome "$@" --ozone-override-screen-size=1920,1080
+# The headless screen is the Vita's screen, so element fullscreen (a YouTube
+# video maximized) fills exactly the 960x544 stream. Normal windows are kept at
+# a 960x544 page area by fit-window.cjs.
+exec /home/jmverges/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome "$@" --ozone-override-screen-size=960,544

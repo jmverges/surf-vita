@@ -306,6 +306,60 @@ static void *report_thread(void *arg) {
   return NULL;
 }
 
+/* ---------- tabs (shown with the SELECT overlay) ---------- */
+
+static int g_tab_sel; /* highlighted tab in the strip */
+
+#define TABS_Y (SCREEN_H - 30 - 36)
+#define TABS_H 36
+
+static void draw_tabs(const sv_status *st) {
+  if (st->tab_count <= 0) return;
+  if (g_tab_sel >= st->tab_count) g_tab_sel = st->tab_count - 1;
+  if (g_tab_sel < 0) g_tab_sel = 0;
+  float w = (float)SCREEN_W / st->tab_count;
+  vita2d_draw_rectangle(0, TABS_Y, SCREEN_W, TABS_H, COL_BAR);
+  for (int i = 0; i < st->tab_count; i++) {
+    float x = i * w;
+    if (i == g_tab_sel) vita2d_draw_rectangle(x + 2, TABS_Y + 2, w - 4, TABS_H - 4, RGBA8(70, 110, 200, 200));
+    else if (st->tabs[i].active) vita2d_draw_rectangle(x + 2, TABS_Y + 2, w - 4, TABS_H - 4, RGBA8(60, 60, 60, 200));
+    text_fit((int)x + 8, TABS_Y + 24, (int)w - 16, st->tabs[i].active ? COL_WHITE : COL_GREY, 0.75f,
+             st->tabs[i].title[0] ? st->tabs[i].title : "New tab");
+  }
+}
+
+/* Buttons and touch while the tab strip is open. Returns 1 when it used the
+ * touch (so the page doesn't also get a click). */
+static int handle_tabs_input(const sv_status *st, unsigned pressed) {
+  int n = st->tab_count;
+  if (n > 0) {
+    if (pressed & SCE_CTRL_LEFT) g_tab_sel = (g_tab_sel + n - 1) % n;
+    if (pressed & SCE_CTRL_RIGHT) g_tab_sel = (g_tab_sel + 1) % n;
+    if (g_tab_sel >= n) g_tab_sel = n - 1;
+    if (pressed & SCE_CTRL_CROSS) sv_tab_select(st->tabs[g_tab_sel].id);
+    if (pressed & SCE_CTRL_SQUARE) sv_tab_close(st->tabs[g_tab_sel].id);
+  }
+  if (pressed & SCE_CTRL_TRIANGLE) sv_tab_new();
+  SceTouchData td;
+  memset(&td, 0, sizeof(td));
+  static int was_down;
+  int down = sceTouchPeek(SCE_TOUCH_PORT_FRONT, &td, 1) >= 0 && td.reportNum > 0;
+  int used = 0;
+  if (down && !was_down && n > 0) {
+    float y = td.report[0].y / TOUCH_H * SCREEN_H, x = td.report[0].x / TOUCH_W * SCREEN_W;
+    if (y >= TABS_Y && y < TABS_Y + TABS_H) {
+      int i = (int)(x / ((float)SCREEN_W / n));
+      if (i >= 0 && i < n) {
+        g_tab_sel = i;
+        sv_tab_select(st->tabs[i].id);
+      }
+      used = 1;
+    }
+  }
+  was_down = down;
+  return used || down;
+}
+
 static void draw_overlay(const sv_status *st) {
   dec_stats ds;
   dec_get_stats(&ds);
@@ -326,9 +380,10 @@ static void draw_overlay(const sv_status *st) {
     text(730, 76, COL_GREY, 0.75f, right);
   }
 
+  draw_tabs(st);
   vita2d_draw_rectangle(0, SCREEN_H - 30, SCREEN_W, 30, COL_BAR);
   text(12, SCREEN_H - 9, COL_GREY, 0.75f,
-       "Touch: tap/drag  Stick/Up/Down: scroll  /\\: URL  []: type  X: Enter  O: Bksp  L/R: back/fwd  START: reload");
+       "Tabs: <- -> choose  X: open  []: close  /\\: new tab  SELECT: back to the page");
 }
 
 /* ---------- input ---------- */
@@ -554,7 +609,15 @@ int main(void) {
         break;
       case APP_RUN: {
         if (pressed & SCE_CTRL_SELECT) show_overlay = !show_overlay;
-        if (st.state == SV_STATE_STREAMING) {
+        if (st.state == SV_STATE_STREAMING && show_overlay && !ime_busy) {
+          /* The tab strip owns the buttons and touch while it's open. */
+          touch_release_all();
+          handle_tabs_input(&st, pressed);
+          handle_stick(&pad, now);
+          if (pressed & SCE_CTRL_LTRIGGER) sv_back();
+          if (pressed & SCE_CTRL_RTRIGGER) sv_forward();
+          if (pressed & SCE_CTRL_START) sv_reload();
+        } else if (st.state == SV_STATE_STREAMING) {
           if (!ime_busy) {
             handle_touch(now);
             handle_stick(&pad, now);

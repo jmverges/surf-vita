@@ -193,3 +193,6 @@ void sv_debug_counts(unsigned long *b, unsigned long *x, unsigned long *a) { *b 
 void sv_click(float x, float y) { (void)x; (void)y; }
 void sv_request_keyframe(void) {}
 void sv_set_audio(sv_audio_fn fn, void *user) { (void)fn; (void)user; }
+void sv_tab_select(int64_t id) { (void)id; }
+void sv_tab_close(int64_t id) { (void)id; }
+void sv_tab_new(void) {}

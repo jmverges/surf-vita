@@ -14,12 +14,22 @@ typedef enum {
   SV_STATE_ERROR,       /* see sv_status.message */
 } sv_state;
 
+#define SV_MAX_TABS 12
+
+typedef struct {
+  int64_t id;
+  char title[64];
+  int active;
+} sv_tab;
+
 typedef struct {
   sv_state state;
   char title[256];
   char url[1024];
   int loading;
   char message[256];    /* human readable error or pause reason */
+  int tab_count;         /* the browser's tabs (first SV_MAX_TABS) */
+  sv_tab tabs[SV_MAX_TABS];
 } sv_status;
 
 typedef struct {
@@ -73,6 +83,10 @@ void sv_wheel(float x, float y, float dx, float dy);   /* dx/dy in CSS px */
 void sv_click(float x, float y);
 /* Ask the backend for a fresh keyframe of the current page (rate limited). */
 void sv_request_keyframe(void);
+/* Tabs (ids from sv_status.tabs). */
+void sv_tab_select(int64_t id);
+void sv_tab_close(int64_t id);
+void sv_tab_new(void);
 void sv_text(const char *utf8);
 enum { SV_KEY_ENTER = 1, SV_KEY_BACKSPACE, SV_KEY_TAB, SV_KEY_ESCAPE,
        SV_KEY_UP, SV_KEY_DOWN, SV_KEY_LEFT, SV_KEY_RIGHT };

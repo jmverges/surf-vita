@@ -513,7 +513,7 @@ int sv_have_server(char *address, size_t address_len) {
 
 enum {
   SV_IN_TOUCH = 1, SV_IN_WHEEL, SV_IN_TEXT, SV_IN_KEY, SV_IN_NAVIGATE,
-  SV_IN_BACK, SV_IN_FORWARD, SV_IN_RELOAD, SV_IN_PRESENTED, SV_IN_CLICK, SV_IN_KEYFRAME
+  SV_IN_BACK, SV_IN_FORWARD, SV_IN_RELOAD, SV_IN_PRESENTED, SV_IN_CLICK, SV_IN_KEYFRAME, SV_IN_TAB
 };
 
 typedef struct sv_input {
@@ -637,6 +637,11 @@ void sv_reload(void) { push_simple(SV_IN_RELOAD, 0, 0); }
 void sv_presented(uint32_t sequence) { push_simple(SV_IN_PRESENTED, 0, sequence); }
 
 void sv_request_keyframe(void) { push_simple(SV_IN_KEYFRAME, 0, 0); }
+
+enum { SV_TAB_SELECT = 0, SV_TAB_CLOSE, SV_TAB_NEW };
+void sv_tab_select(int64_t id) { push_simple(SV_IN_TAB, SV_TAB_SELECT, (uint32_t)id); }
+void sv_tab_close(int64_t id) { push_simple(SV_IN_TAB, SV_TAB_CLOSE, (uint32_t)id); }
+void sv_tab_new(void) { push_simple(SV_IN_TAB, SV_TAB_NEW, 0); }
 
 void sv_click(float x, float y) {
   sv_input in;
@@ -842,6 +847,15 @@ static int handle_input(sv_conn_state *s, sv_input *in) {
   switch (in->kind) {
   case SV_IN_TOUCH: r = handle_touch(s, in); break;
   case SV_IN_CLICK: r = send_click(s, in->x, in->y); break;
+  case SV_IN_TAB: {
+    static const char *actions[] = {"select", "close", "new"};
+    if (in->a < SV_TAB_SELECT || in->a > SV_TAB_NEW) break;
+    cmd.kind = SURF_PROTOCOL_COMMAND_TAB;
+    cmd.data.tab.action = surf_string_from_cstr(actions[in->a]);
+    cmd.data.tab.id = (int32_t)in->u;
+    r = send_command(s, &cmd);
+    break;
+  }
   case SV_IN_KEYFRAME: { /* the app's decoder is holding pictures back */
     uint64_t now = sv_now_ns();
     if (!s->cap_reqkeyframe || s->paused) break;
@@ -925,6 +939,16 @@ static void refresh_status(sv_conn_state *s) {
     if (snap.current_url.data) memcpy(next.url, snap.current_url.data, n);
     next.url[n] = 0;
     next.loading = snap.loading ? 1 : 0;
+    next.tab_count = 0;
+    for (size_t t = 0; t < snap.tab_count && next.tab_count < SV_MAX_TABS; t++) {
+      sv_tab *dst = &next.tabs[next.tab_count++];
+      size_t tn = snap.tabs[t].title.length < sizeof(dst->title) - 1 ? snap.tabs[t].title.length
+                                                                      : sizeof(dst->title) - 1;
+      dst->id = snap.tabs[t].id;
+      dst->active = snap.tabs[t].active || (snap.has_active_tab && snap.tabs[t].id == snap.active_tab_id);
+      if (snap.tabs[t].title.data && tn) memcpy(dst->title, snap.tabs[t].title.data, tn);
+      dst->title[tn] = 0;
+    }
   }
   s->paused = 0;
   next.state = SV_STATE_STREAMING;
