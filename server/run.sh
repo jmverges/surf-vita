@@ -7,4 +7,5 @@ export CHROME="${CHROME:-$PWD/chrome-wrapper.sh}"
 # Chromium runs headless; its toolbar still takes part of the window, so keep
 # the page area at the Vita's 960x544 (see fit-window.cjs).
 pgrep -f "node fit-window.cjs" >/dev/null || (setsid node fit-window.cjs "$SURF_HOME" 960 544 >> fit-window.log 2>&1 &)
-exec ./surf-0.17.0-linux-amd64/surf serve
+# Surf 0.17.0 + vita-fixes (upstream/ branch vita-fixes): unrotated landscape, view re-applied on fullscreen.
+exec ./surf-vita-patched serve

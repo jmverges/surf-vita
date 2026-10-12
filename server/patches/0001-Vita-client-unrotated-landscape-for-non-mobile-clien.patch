@@ -1,0 +1,52 @@
+From f46c214e8605a4c986295a878434badb1e6460f1 Mon Sep 17 00:00:00 2001
+From: Juan Manuel Verges <juanmanuel.vergessolanas@gmail.com>
+Date: Mon, 12 Oct 2026 16:31:27 +0000
+Subject: [PATCH] Vita client: unrotated landscape for non-mobile clients,
+ re-apply the view on fullscreen
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ backend/internal/browser/fullscreen.go | 6 ++++++
+ backend/internal/browser/tabs.go       | 9 ++++++++-
+ 2 files changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/backend/internal/browser/fullscreen.go b/backend/internal/browser/fullscreen.go
+index 531b14b..c434647 100644
+--- a/backend/internal/browser/fullscreen.go
++++ b/backend/internal/browser/fullscreen.go
+@@ -50,6 +50,12 @@ func (b *Controller) onFullscreenBinding(ev cdp.Event) {
+ 	b.mu.Unlock()
+ 	if changed && active {
+ 		b.broadcast(protocol.BoolEvent{Type: "fullscreen", On: on})
++		// Entering or leaving element fullscreen can leave the page at the
++		// window's own size (smaller than the client's, so letterboxed):
++		// apply the client's view again.
++		if b.cdp != nil {
++			go b.applyView(tab)
++		}
+ 	}
+ }
+ 
+diff --git a/backend/internal/browser/tabs.go b/backend/internal/browser/tabs.go
+index a7e1372..ab9468f 100644
+--- a/backend/internal/browser/tabs.go
++++ b/backend/internal/browser/tabs.go
+@@ -618,7 +618,14 @@ func (b *Controller) applyView(t *Tab) {
+ 	b.mu.Unlock()
+ 	orientation, angle := "portraitPrimary", 0
+ 	if w > h {
+-		orientation, angle = "landscapePrimary", 90
++		// A phone is portrait at rest, so its landscape screen is rotated 90°.
++		// A client that isn't one (a landscape handheld) is landscape at 0°;
++		// with 90° Chromium swaps the screen to 544x960 and element fullscreen
++		// lays out at 544 wide, so the video shows zoomed in.
++		orientation, angle = "landscapePrimary", 0
++		if mobile {
++			angle = 90
++		}
+ 	}
+ 	// tabCapture reads Chromium's compositor surface, so its real headless
+ 	// window must follow the client too; otherwise Chromium scales a stale
+-- 
+2.43.0
+

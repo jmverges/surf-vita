@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
   for (i = 0; i < ticks; i++) {
     usleep(100000);
     if (g_aus) sv_presented(g_last_seq);
-    if (i == 30 && !getenv("SV_TEST_CLICK")) sv_navigate("https://example.com/");
+    if (i == 30 && getenv("SV_TEST_NAVIGATE")) sv_navigate(getenv("SV_TEST_NAVIGATE"));
     if (i == 40 && getenv("SV_TEST_CLICK")) {
       float cx = 0, cy = 0;
       if (sscanf(getenv("SV_TEST_CLICK"), "%f,%f", &cx, &cy) == 2) { sv_click(cx, cy); fprintf(stderr, "clicked %.3f,%.3f\n", cx, cy); }
