@@ -1,0 +1,7 @@
+upstream/
+server/home/
+server/*.tar.gz
+server/surf-*/
+server/serve.log
+vita/build/
+vita/build-real/
