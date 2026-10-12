@@ -441,8 +441,10 @@ static void handle_touch(uint64_t now) {
   float dx = g_tap.x - g_tap.x0, dy = g_tap.y - g_tap.y0;
   if (!g_tap.dragging && (dx * dx + dy * dy) > DRAG_THRESHOLD * DRAG_THRESHOLD) g_tap.dragging = 1;
   if (g_tap.dragging && now - g_last_touch_move_us >= INPUT_INTERVAL_US) {
-    /* Content follows the finger: moving the finger up scrolls the page down. */
-    float wx = (g_tap.sent_x - g_tap.x) * SCREEN_W, wy = (g_tap.sent_y - g_tap.y) * SCREEN_H;
+    /* Content follows the finger. Measured on the Vita (12-oct): the backend's
+     * wheel scrolls opposite to the finger's travel, so the delta is the
+     * finger's own movement. */
+    float wx = (g_tap.x - g_tap.sent_x) * SCREEN_W, wy = (g_tap.y - g_tap.sent_y) * SCREEN_H;
     if (wx != 0 || wy != 0) {
       sv_wheel(g_tap.x, g_tap.y, wx, wy);
       g_tap.sent_x = g_tap.x;
