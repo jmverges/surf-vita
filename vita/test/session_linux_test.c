@@ -18,6 +18,10 @@ static void on_video(void *user, const uint8_t *au, size_t len, int idr, uint16_
   (void)user;
   if (len < 4 || !(au[0] == 0 && au[1] == 0 && (au[2] == 1 || (au[2] == 0 && au[3] == 1))))
     fprintf(stderr, "AU %u is not Annex B\n", seq);
+  if (getenv("SV_DUMP")) {
+    FILE *f = fopen(getenv("SV_DUMP"), "ab");
+    if (f) { fwrite(au, 1, len, f); fclose(f); }
+  }
   g_aus++;
   g_idr += idr ? 1 : 0;
   g_bytes += len;
@@ -66,7 +70,11 @@ int main(int argc, char **argv) {
   for (i = 0; i < ticks; i++) {
     usleep(100000);
     if (g_aus) sv_presented(g_last_seq);
-    if (i == 30) sv_navigate("https://example.com/");
+    if (i == 30 && !getenv("SV_TEST_CLICK")) sv_navigate("https://example.com/");
+    if (i == 40 && getenv("SV_TEST_CLICK")) {
+      float cx = 0, cy = 0;
+      if (sscanf(getenv("SV_TEST_CLICK"), "%f,%f", &cx, &cy) == 2) { sv_click(cx, cy); fprintf(stderr, "clicked %.3f,%.3f\n", cx, cy); }
+    }
     if (i == 80) {
       sv_touch(0, 0, 0.5f, 0.5f);
       sv_touch(1, 0, 0.5f, 0.45f);

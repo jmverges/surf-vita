@@ -32,6 +32,13 @@ typedef struct {
   void *user;
 } sv_callbacks;
 
+/* Audio: signed 16-bit little-endian PCM as the backend sends it (16 kHz mono
+ * in 0.17.0). Register before sv_start; called on the network thread, the
+ * buffer is valid only during the call. Without a callback audio stays off. */
+typedef void (*sv_audio_fn)(void *user, const int16_t *pcm, size_t samples, int rate,
+                            int channels);
+void sv_set_audio(sv_audio_fn fn, void *user);
+
 /* Pairing (blocking; call from a worker thread or before streaming).
  * address "ip:port", code = the 6 digits shown by `surf pair`.
  * On success fills words (the 6 confirmation words, space separated) and
@@ -62,6 +69,10 @@ void sv_stop(void);
 enum { SV_TOUCH_DOWN = 0, SV_TOUCH_MOVE = 1, SV_TOUCH_UP = 2 };
 void sv_touch(int phase, int finger, float x, float y);
 void sv_wheel(float x, float y, float dx, float dy);   /* dx/dy in CSS px */
+/* A left mouse click at a surface fraction (more reliable than touch taps). */
+void sv_click(float x, float y);
+/* Ask the backend for a fresh keyframe of the current page (rate limited). */
+void sv_request_keyframe(void);
 void sv_text(const char *utf8);
 enum { SV_KEY_ENTER = 1, SV_KEY_BACKSPACE, SV_KEY_TAB, SV_KEY_ESCAPE,
        SV_KEY_UP, SV_KEY_DOWN, SV_KEY_LEFT, SV_KEY_RIGHT };
@@ -74,5 +85,8 @@ void sv_reload(void);
 /* The app shell reports when a decoded frame was shown (media pipeline
  * acknowledgement, see docs/porting-clients.md "Media path" step 5). */
 void sv_presented(uint32_t sequence);
+
+/* Debug: WebSocket binary messages, unparsable media frames, admitted video AUs. */
+void sv_debug_counts(unsigned long *binary, unsigned long *bad, unsigned long *admitted);
 
 #endif

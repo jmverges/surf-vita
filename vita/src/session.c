@@ -40,6 +40,21 @@ typedef struct sv_record {
   uint16_t port;
 } sv_record;
 
+static sv_audio_fn g_audio_fn;
+static void *g_audio_user;
+void sv_set_audio(sv_audio_fn fn, void *user) {
+  g_audio_fn = fn;
+  g_audio_user = user;
+}
+
+/* Debug counters for the on-screen overlay. */
+static volatile unsigned long g_dbg_binary, g_dbg_badframe, g_dbg_admitted;
+void sv_debug_counts(unsigned long *binary, unsigned long *bad, unsigned long *admitted) {
+  *binary = g_dbg_binary;
+  *bad = g_dbg_badframe;
+  *admitted = g_dbg_admitted;
+}
+
 static void errf(char *err, size_t len, const char *msg) {
   if (err && len) snprintf(err, len, "%s", msg);
 }
@@ -498,7 +513,7 @@ int sv_have_server(char *address, size_t address_len) {
 
 enum {
   SV_IN_TOUCH = 1, SV_IN_WHEEL, SV_IN_TEXT, SV_IN_KEY, SV_IN_NAVIGATE,
-  SV_IN_BACK, SV_IN_FORWARD, SV_IN_RELOAD, SV_IN_PRESENTED
+  SV_IN_BACK, SV_IN_FORWARD, SV_IN_RELOAD, SV_IN_PRESENTED, SV_IN_CLICK, SV_IN_KEYFRAME
 };
 
 typedef struct sv_input {
@@ -621,6 +636,18 @@ void sv_forward(void) { push_simple(SV_IN_FORWARD, 0, 0); }
 void sv_reload(void) { push_simple(SV_IN_RELOAD, 0, 0); }
 void sv_presented(uint32_t sequence) { push_simple(SV_IN_PRESENTED, 0, sequence); }
 
+void sv_request_keyframe(void) { push_simple(SV_IN_KEYFRAME, 0, 0); }
+
+void sv_click(float x, float y) {
+  sv_input in;
+  if (!finite01(x) || !finite01(y)) return;
+  memset(&in, 0, sizeof(in));
+  in.kind = SV_IN_CLICK;
+  in.x = x;
+  in.y = y;
+  queue_push(&in);
+}
+
 /* ======================================================== network thread */
 
 typedef struct sv_conn_state {
@@ -730,6 +757,39 @@ static int send_touch(sv_conn_state *s, const char *phase, int finger_index_only
   return send_command(s, &cmd);
 }
 
+/* A left click at a surface fraction: pointer move, down, up (desktop mouse
+ * semantics, backend pointer_input.go). Needs the `pointer-input` capability. */
+static int send_pointer(sv_conn_state *s, const char *phase, double x, double y, int buttons,
+                        int clicks) {
+  surf_protocol_command_t cmd;
+  surf_input_sample_t sample;
+  uint32_t surface = input_surface(s);
+  if (!s->cap_pointer || surface == 0 || s->paused) return 0;
+  surf_input_set_surface(&s->input, surface);
+  if (surf_input_pointer_sample(&s->input, x, y, 1.0, 1.0, sv_now_ns(), &sample) != SURF_INPUT_OK)
+    return 0;
+  memset(&cmd, 0, sizeof(cmd));
+  cmd.kind = SURF_PROTOCOL_COMMAND_POINTER;
+  cmd.causal.interaction_id = sample.interaction_id;
+  cmd.causal.client_ns = sample.client_ns;
+  cmd.data.pointer.phase = surf_string_from_cstr(phase);
+  cmd.data.pointer.button = surf_string_from_cstr(clicks ? "left" : "none");
+  cmd.data.pointer.sequence = sample.sequence;
+  cmd.data.pointer.timestamp_ns = sample.event_ns ? sample.event_ns : sample.client_ns;
+  cmd.data.pointer.surface = surface;
+  cmd.data.pointer.x = x;
+  cmd.data.pointer.y = y;
+  cmd.data.pointer.buttons = buttons;
+  cmd.data.pointer.clicks = clicks;
+  return send_command(s, &cmd);
+}
+
+static int send_click(sv_conn_state *s, double x, double y) {
+  if (send_pointer(s, "move", x, y, 0, 0) != 0) return -1;
+  if (send_pointer(s, "down", x, y, 1, 1) != 0) return -1;
+  return send_pointer(s, "up", x, y, 0, 1);
+}
+
 static int handle_touch(sv_conn_state *s, const sv_input *in) {
   int i, slot = -1, r = 0;
   for (i = 0; i < SV_MAX_TOUCH; i++)
@@ -781,6 +841,15 @@ static int handle_input(sv_conn_state *s, sv_input *in) {
   memset(&cmd, 0, sizeof(cmd));
   switch (in->kind) {
   case SV_IN_TOUCH: r = handle_touch(s, in); break;
+  case SV_IN_CLICK: r = send_click(s, in->x, in->y); break;
+  case SV_IN_KEYFRAME: { /* the app's decoder is holding pictures back */
+    uint64_t now = sv_now_ns();
+    if (!s->cap_reqkeyframe || s->paused) break;
+    if (s->last_keyframe_request_ns && now - s->last_keyframe_request_ns < 100000000ull) break;
+    s->last_keyframe_request_ns = now;
+    r = send_simple(s, SURF_PROTOCOL_COMMAND_REQUEST_KEYFRAME);
+    break;
+  }
   case SV_IN_WHEEL: {
     surf_input_sample_t sample;
     uint32_t surface = input_surface(s);
@@ -899,8 +968,17 @@ static int handle_binary(sv_conn_state *s, const uint8_t *data, size_t len) {
   surf_frame_view_t frame;
   surf_media_admission_t adm;
   int idr;
-  if (surf_frame_parse(data, len, &frame) != SURF_FRAME_OK) return 0; /* drop bad frames */
-  if (frame.type != SURF_FRAME_TYPE_VIDEO || s->paused) return 0;   /* no audio path */
+  g_dbg_binary++;
+  if (surf_frame_parse(data, len, &frame) != SURF_FRAME_OK) { g_dbg_badframe++; return 0; } /* drop bad frames */
+  if (frame.type == SURF_FRAME_TYPE_AUDIO) {
+    /* width = sample rate, height = channels (docs/protocol.md media envelope) */
+    if (g_audio_fn && !s->paused && frame.payload_length >= 2 && frame.width > 0 &&
+        frame.height > 0)
+      g_audio_fn(g_audio_user, (const int16_t *)frame.payload, frame.payload_length / 2,
+                 frame.width, frame.height);
+    return 0;
+  }
+  if (frame.type != SURF_FRAME_TYPE_VIDEO || s->paused) return 0;
   idr = (frame.flags & SURF_FRAME_FLAG_IDR) != 0;
   if (surf_media_policy_admit(&s->media, frame.encoder_generation, frame.sequence, idr, &adm) !=
       SURF_MEDIA_OK)
@@ -912,6 +990,7 @@ static int handle_binary(sv_conn_state *s, const uint8_t *data, size_t len) {
   s->ring[s->ring_next].gen = frame.encoder_generation;
   s->ring[s->ring_next].source = frame.source_sequence;
   s->ring_next = (s->ring_next + 1) % SV_PRESENT_RING;
+  g_dbg_admitted++;
   if (g_cb.on_video && frame.payload_length > 0)
     g_cb.on_video(g_cb.user, frame.payload, frame.payload_length, idr, frame.width, frame.height,
                   frame.sequence);
@@ -1054,10 +1133,10 @@ static int run_connection(sv_conn_state *s, uint64_t *connected_ms, char *err, s
     return SV_RETRY;
   }
   {
-    surf_protocol_command_t audio; /* no audio path on this client */
+    surf_protocol_command_t audio; /* audio on only when the app plays it */
     memset(&audio, 0, sizeof(audio));
     audio.kind = SURF_PROTOCOL_COMMAND_AUDIO;
-    audio.data.toggle.on = 0;
+    audio.data.toggle.on = g_audio_fn != NULL;
     send_command(s, &audio);
   }
   emit_status(s, SV_STATE_STREAMING, NULL);

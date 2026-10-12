@@ -15,6 +15,12 @@
 #include <string.h>
 #include <vita2d.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include "audio.h"
 #include "decoder.h"
 #include "session.h"
 
@@ -23,7 +29,7 @@
 #define TOUCH_W 1920.0f
 #define TOUCH_H 1088.0f
 
-#define INPUT_INTERVAL_US 33333 /* ~30 Hz for touch moves and stick scroll */
+#define INPUT_INTERVAL_US 16667 /* 60 Hz */
 #define STICK_DEADZONE 24
 #define STICK_MAX_PX 60.0f      /* CSS px per tick at full tilt (~1800 px/s) */
 #define DPAD_WHEEL_PX 120.0f
@@ -33,7 +39,7 @@
 #define COL_GREY RGBA8(170, 170, 170, 255)
 #define COL_ACCENT RGBA8(110, 190, 255, 255)
 #define COL_ERROR RGBA8(255, 120, 110, 255)
-#define COL_BAR RGBA8(0, 0, 0, 190)
+#define COL_BAR RGBA8(0, 0, 0, 110)
 #define COL_PANEL RGBA8(20, 22, 28, 230)
 
 /* ---------- shared state ---------- */
@@ -255,6 +261,51 @@ static const char *state_name(sv_state s) {
   return "?";
 }
 
+/* Debug: once a second, send the pipeline counters as one UDP line to the
+ * paired host on port 18999 (`nc -klu 18999` there), so testing needs no photos. */
+static volatile unsigned long g_render_frames;
+static volatile int g_report_on;
+
+static void debug_report(void) {
+  static int sock = -1;
+  static uint64_t last_us;
+  uint64_t now = sceKernelGetProcessTimeWide();
+  if (now - last_us < 1000000) return;
+  last_us = now;
+  char host[128];
+  snprintf(host, sizeof(host), "%s", g_address);
+  char *colon = strchr(host, ':');
+  if (colon) *colon = 0;
+  struct sockaddr_in to;
+  memset(&to, 0, sizeof(to));
+  to.sin_family = AF_INET;
+  to.sin_port = htons(18999);
+  if (!host[0] || inet_pton(AF_INET, host, &to.sin_addr) != 1) return;
+  if (sock < 0) sock = socket(AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0) return;
+  dec_stats ds;
+  dec_get_stats(&ds);
+  unsigned long bin, bad, adm;
+  sv_debug_counts(&bin, &bad, &adm);
+  sv_status st = status_snapshot();
+  char line[512];
+  int n = snprintf(line, sizeof(line),
+                   "t=%llu frames=%lu indec=%d pend=%d state=%d ws=%lu bad=%lu adm=%lu sub=%lu dec=%lu noout=%lu err=%lu drop=%lu idr?=%d lasterr=0x%08lx title=%.60s\n",
+                   (unsigned long long)(now / 1000000), g_render_frames, dec_in_decode, dec_pending, (int)st.state, bin, bad, adm,
+                   (unsigned long)ds.submitted, (unsigned long)ds.decoded, (unsigned long)ds.no_output, (unsigned long)ds.errors,
+                   (unsigned long)ds.dropped, ds.waiting_idr, (unsigned long)ds.last_error, st.title);
+  if (n > 0) sendto(sock, line, (size_t)n, 0, (struct sockaddr *)&to, sizeof(to));
+}
+
+static void *report_thread(void *arg) {
+  (void)arg;
+  for (;;) {
+    if (g_report_on) debug_report();
+    sceKernelDelayThread(200 * 1000);
+  }
+  return NULL;
+}
+
 static void draw_overlay(const sv_status *st) {
   dec_stats ds;
   dec_get_stats(&ds);
@@ -267,6 +318,13 @@ static void draw_overlay(const sv_status *st) {
   snprintf(right, sizeof(right), "dec %lu err %lu drop %lu", (unsigned long)ds.decoded,
            (unsigned long)ds.errors, (unsigned long)ds.dropped);
   text(730, 52, COL_GREY, 0.75f, right);
+  {
+    unsigned long bin, bad, adm;
+    sv_debug_counts(&bin, &bad, &adm);
+    snprintf(right, sizeof(right), "ws %lu bad %lu adm %lu sub %lu%s", bin, bad, adm,
+             (unsigned long)ds.submitted, ds.waiting_idr ? " idr?" : "");
+    text(730, 76, COL_GREY, 0.75f, right);
+  }
 
   vita2d_draw_rectangle(0, SCREEN_H - 30, SCREEN_W, 30, COL_BAR);
   text(12, SCREEN_H - 9, COL_GREY, 0.75f,
@@ -275,25 +333,20 @@ static void draw_overlay(const sv_status *st) {
 
 /* ---------- input ---------- */
 
-typedef struct {
-  int active;
-  int vita_id;
-  float x, y;
-  float sent_x, sent_y;
-} finger_slot;
-
-static finger_slot g_fingers[MAX_FINGERS];
 static uint64_t g_last_touch_move_us;
 static uint64_t g_last_wheel_us;
 
-static void touch_release_all(void) {
-  for (int i = 0; i < MAX_FINGERS; i++) {
-    if (g_fingers[i].active) {
-      sv_touch(SV_TOUCH_UP, i, g_fingers[i].x, g_fingers[i].y);
-      g_fingers[i].active = 0;
-    }
-  }
-}
+/* One finger: a tap is a mouse click, a drag scrolls (wheel). Chromium's
+ * touch emulation dropped Vita taps, and desktop click/wheel semantics are
+ * what the backend's pointer input handles most reliably. */
+static struct {
+  int active, vita_id, dragging;
+  float x0, y0, x, y, sent_x, sent_y;
+} g_tap;
+
+#define DRAG_THRESHOLD 0.02f /* of the screen: ~19 px horizontally */
+
+static void touch_release_all(void) { g_tap.active = 0; }
 
 static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
 
@@ -302,46 +355,45 @@ static void handle_touch(uint64_t now) {
   memset(&td, 0, sizeof(td));
   if (sceTouchPeek(SCE_TOUCH_PORT_FRONT, &td, 1) < 0) return;
 
-  int seen[MAX_FINGERS] = {0};
+  int found = 0;
   for (unsigned r = 0; r < td.reportNum && r < SCE_TOUCH_MAX_REPORT; r++) {
-    int id = td.report[r].id;
     float x = clamp01(td.report[r].x / TOUCH_W);
     float y = clamp01(td.report[r].y / TOUCH_H);
-    int slot = -1;
-    for (int i = 0; i < MAX_FINGERS; i++)
-      if (g_fingers[i].active && g_fingers[i].vita_id == id) { slot = i; break; }
-    if (slot < 0) {
-      for (int i = 0; i < MAX_FINGERS; i++)
-        if (!g_fingers[i].active) { slot = i; break; }
-      if (slot < 0) continue;
-      g_fingers[slot] = (finger_slot){1, id, x, y, x, y};
-      sv_touch(SV_TOUCH_DOWN, slot, x, y);
-    } else {
-      g_fingers[slot].x = x;
-      g_fingers[slot].y = y;
+    if (!g_tap.active) {
+      g_tap.active = 1;
+      g_tap.vita_id = td.report[r].id;
+      g_tap.dragging = 0;
+      g_tap.x0 = g_tap.x = g_tap.sent_x = x;
+      g_tap.y0 = g_tap.y = g_tap.sent_y = y;
+      found = 1;
+      break;
     }
-    seen[slot] = 1;
-  }
-
-  for (int i = 0; i < MAX_FINGERS; i++) {
-    if (g_fingers[i].active && !seen[i]) {
-      sv_touch(SV_TOUCH_UP, i, g_fingers[i].x, g_fingers[i].y);
-      g_fingers[i].active = 0;
+    if (td.report[r].id == g_tap.vita_id) {
+      g_tap.x = x;
+      g_tap.y = y;
+      found = 1;
+      break;
     }
   }
 
-  if (now - g_last_touch_move_us >= INPUT_INTERVAL_US) {
-    int any = 0;
-    for (int i = 0; i < MAX_FINGERS; i++) {
-      finger_slot *f = &g_fingers[i];
-      if (f->active && (f->x != f->sent_x || f->y != f->sent_y)) {
-        sv_touch(SV_TOUCH_MOVE, i, f->x, f->y);
-        f->sent_x = f->x;
-        f->sent_y = f->y;
-        any = 1;
-      }
+  if (g_tap.active && !found) { /* finger lifted */
+    if (!g_tap.dragging) sv_click(g_tap.x0, g_tap.y0);
+    g_tap.active = 0;
+    return;
+  }
+  if (!g_tap.active) return;
+
+  float dx = g_tap.x - g_tap.x0, dy = g_tap.y - g_tap.y0;
+  if (!g_tap.dragging && (dx * dx + dy * dy) > DRAG_THRESHOLD * DRAG_THRESHOLD) g_tap.dragging = 1;
+  if (g_tap.dragging && now - g_last_touch_move_us >= INPUT_INTERVAL_US) {
+    /* Content follows the finger: moving the finger up scrolls the page down. */
+    float wx = (g_tap.sent_x - g_tap.x) * SCREEN_W, wy = (g_tap.sent_y - g_tap.y) * SCREEN_H;
+    if (wx != 0 || wy != 0) {
+      sv_wheel(g_tap.x, g_tap.y, wx, wy);
+      g_tap.sent_x = g_tap.x;
+      g_tap.sent_y = g_tap.y;
+      g_last_touch_move_us = now;
     }
-    if (any) g_last_touch_move_us = now;
   }
 }
 
@@ -405,11 +457,18 @@ static void start_session(void) {
 
 int main(void) {
   init_system();
+  {
+    pthread_t rt;
+    pthread_create(&rt, NULL, report_thread, NULL);
+  }
 
   vita2d_init();
   vita2d_set_clear_color(RGBA8(0, 0, 0, 255));
   vita2d_set_vblank_wait(1);
   g_font = vita2d_load_default_pgf();
+
+  audio_init();
+  sv_set_audio(audio_push, NULL);
 
   char dec_err[96] = "";
   int ret = dec_init();
@@ -424,7 +483,7 @@ int main(void) {
     ime_open(IME_ADDRESS, "Surf server address (ip:port)", "", SCE_IME_TYPE_URL, 64);
   }
 
-  int show_overlay = 1;
+  int show_overlay = 0; /* SELECT toggles it */
   uint32_t prev_buttons = 0;
   char ime_text[IME_MAX * 4 + 1];
 
@@ -529,6 +588,14 @@ int main(void) {
     }
 
     /* ----- draw ----- */
+    g_report_on = (app == APP_RUN);
+    /* The hardware decoder outputs a picture only after a few more AUs; on a
+     * static page none come, so nudge the backend for keyframes until the
+     * latest picture is out. */
+    if (app == APP_RUN && dec_pending > 0 &&
+        sceKernelGetProcessTimeWide() - dec_last_au_us > 120000)
+      sv_request_keyframe();
+    g_render_frames++;
     vita2d_start_drawing();
     vita2d_clear_screen();
 

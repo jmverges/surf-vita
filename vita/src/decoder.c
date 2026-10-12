@@ -5,9 +5,11 @@
  * RGBA8888 straight into vita2d textures (vita2d allocates texture memory in
  * CDRAM, which is physically contiguous and GPU mapped). */
 #include "decoder.h"
+#include "session.h"
 
 #include <psp2/kernel/sysmem.h>
 #include <psp2/kernel/threadmgr.h>
+#include <psp2/kernel/processmgr.h>
 #include <psp2/sysmodule.h>
 #include <psp2/videodec.h>
 #include <pthread.h>
@@ -19,7 +21,7 @@
 
 #define NUM_TEXTURES   3
 #define QUEUE_CAP      8
-#define NUM_REF_FRAMES 4
+#define NUM_REF_FRAMES 4 /* as vita-moonlight; the decoder holds ~4 pictures for output, fewer corrupts them */
 #define AU_PADDING     64
 #define SEQ_FIFO       16
 
@@ -165,6 +167,15 @@ static int pick_free_slot_locked(void) {
   return -1; /* cannot happen with 3 slots and one writer */
 }
 
+volatile int dec_in_decode;
+volatile int dec_pending;                 /* AUs decoded with no picture out yet */
+volatile unsigned long long dec_last_au_us; /* when the last AU reached the decoder */
+volatile int dec_lowdelay_ret = 1; /* debug: result of the low-delay call */
+
+/* Not in the VitaSDK headers (SonicMastr/libraries avcdec.h); exported by
+ * SceVideodec. Mode 0 = lowest output delay. */
+ /* debug: inside sceAvcdecDecode */
+
 static void *decoder_thread(void *arg) {
   (void)arg;
   int need_idr = 1;            /* decoder side: skip until an IDR decodes */
@@ -226,7 +237,10 @@ static void *decoder_thread(void *arg) {
     au.pts.upper = au.pts.lower = 0xFFFFFFFF;
     au.dts.upper = au.dts.lower = 0xFFFFFFFF;
 
+    dec_last_au_us = sceKernelGetProcessTimeWide();
+    dec_in_decode = 1;
     int ret = sceAvcdecDecode(&D.ctrl, &au, &array);
+    dec_in_decode = 0;
 
     pthread_mutex_lock(&D.lock);
     D.writing = -1;
@@ -238,6 +252,11 @@ static void *decoder_thread(void *arg) {
     } else {
       need_idr = 0;
       if (seq_n < SEQ_FIFO) seq_fifo[seq_n++] = it.sequence;
+      /* The backend paces frames on presentation reports. The hardware decoder
+       * holds the first pictures back, so an unanswered frame would stall the
+       * stream (2 frames, then nothing): report each accepted AU right away. */
+      if (array.numOfOutput < 1) sv_presented(it.sequence);
+      D.stats.no_output += array.numOfOutput < 1;
       if (array.numOfOutput >= 1 && seq_n > 0) {
         /* Output is in decode order for constrained baseline; if the decoder
          * delays output, the picture belongs to the oldest pending AU. */
@@ -252,6 +271,7 @@ static void *decoder_thread(void *arg) {
         D.stats.decoded++;
       }
     }
+    dec_pending = seq_n;
     D.stats.waiting_idr = D.waiting_idr || need_idr;
     pthread_mutex_unlock(&D.lock);
     free_item(&it);
@@ -298,12 +318,14 @@ int dec_init(void) {
   D.ready = D.shown = D.writing = D.last_returned = -1;
   D.waiting_idr = 1;
 
+  /* The video decoder library is part of the system already (vita-moonlight
+   * calls sceVideodecInitLibrary directly); on hardware loading the AVCDEC
+   * sysmodule fails with SCE_SYSMODULE_ERROR_INVALID_VALUE, so it's optional. */
   ret = sceSysmoduleLoadModule(SCE_SYSMODULE_AVCDEC);
-  if (ret < 0) {
-    printf("decoder: load AVCDEC module 0x%08x\n", ret);
-    return ret;
-  }
-  D.sysmodule_loaded = 1;
+  if (ret < 0)
+    printf("decoder: load AVCDEC module 0x%08x (ignored)\n", ret);
+  else
+    D.sysmodule_loaded = 1;
 
   /* Textures: RGBA8888 (ABGR in GXM terms), CDRAM (physically contiguous). */
   vita2d_texture_set_alloc_memblock_type(SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW);
@@ -332,6 +354,11 @@ int dec_init(void) {
     goto fail;
   }
   D.lib_inited = 1;
+  /* The decoder otherwise holds ~4 pictures before the first output, which
+   * freezes a mostly static page (the backend sends frames only on change). */
+  /* sceAvcdecSetLowDelayModeNongameapp crashes a game-type homebrew on 3.74
+   * (tested 12-oct): not called. */
+  dec_lowdelay_ret = 0;
 
   SceAvcdecQueryDecoderInfo q;
   SceAvcdecDecoderInfo qi;

@@ -24,6 +24,7 @@ typedef struct {
   uint32_t dropped;      /* AUs dropped by the queue policy or IDR wait */
   uint32_t decoded;      /* pictures output */
   uint32_t errors;       /* sceAvcdecDecode failures */
+  uint32_t no_output;    /* decodes that returned no picture yet */
   uint32_t last_error;   /* last SCE error code (0 if none) */
   int waiting_idr;
 } dec_stats;
@@ -45,5 +46,10 @@ int dec_latest(vita2d_texture **tex, int *width, int *height,
                uint32_t *sequence, int *is_new);
 
 void dec_get_stats(dec_stats *out);
+
+extern volatile int dec_in_decode;
+extern volatile int dec_pending;
+extern volatile unsigned long long dec_last_au_us;
+extern volatile int dec_lowdelay_ret;
 
 #endif

@@ -21,7 +21,7 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -O2 -D_GNU_SOURCE")
 
-set(APP_SOURCES src/main.c src/decoder.c)
+set(APP_SOURCES src/main.c src/decoder.c src/audio.c)
 
 if(SV_STUB_SESSION)
   set(SESSION_SOURCES src/session_stub.c)
@@ -59,6 +59,7 @@ target_link_libraries(${PROJECT_NAME}
   ScePgf_stub
   ScePvf_stub
   SceDisplay_stub
+  SceAudio_stub
   SceGxm_stub
   SceCtrl_stub
   SceTouch_stub

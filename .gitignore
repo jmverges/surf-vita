@@ -5,3 +5,8 @@ server/surf-*/
 server/serve.log
 vita/build/
 vita/build-real/
+vita/vita-stats.log
+vita/stats-listen.err
+vita/dump.h264
+vita/frame0.png
+vita-backup/
