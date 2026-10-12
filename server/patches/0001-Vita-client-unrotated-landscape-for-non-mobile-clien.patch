@@ -1,7 +1,7 @@
 From f46c214e8605a4c986295a878434badb1e6460f1 Mon Sep 17 00:00:00 2001
 From: Juan Manuel Verges <juanmanuel.vergessolanas@gmail.com>
 Date: Mon, 12 Oct 2026 16:31:27 +0000
-Subject: [PATCH] Vita client: unrotated landscape for non-mobile clients,
+Subject: [PATCH 1/2] Vita client: unrotated landscape for non-mobile clients,
  re-apply the view on fullscreen
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

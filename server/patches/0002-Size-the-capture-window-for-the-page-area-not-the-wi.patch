@@ -1,0 +1,73 @@
+From 140f45994c52319cb4aae67c630e268121feedbf Mon Sep 17 00:00:00 2001
+From: Juan Manuel Verges <juanmanuel.vergessolanas@gmail.com>
+Date: Mon, 12 Oct 2026 17:46:16 +0000
+Subject: [PATCH 2/2] Size the capture window for the page area, not the window
+
+Headless Chromium still lays out its tab strip and toolbar inside the window
+(143 px here), so a window sized to the client's viewport left a 960x401 page
+and a letterboxed stream.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ backend/internal/browser/capture_surface.go | 30 +++++++++++++++++++++
+ backend/internal/browser/tabs.go            |  6 ++++-
+ 2 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/backend/internal/browser/capture_surface.go b/backend/internal/browser/capture_surface.go
+index f0d9e53..d0f5eaa 100644
+--- a/backend/internal/browser/capture_surface.go
++++ b/backend/internal/browser/capture_surface.go
+@@ -41,3 +41,33 @@ func (b *Controller) resizeCaptureSurface(targetID string, width, height int) {
+ 	}
+ 	log.Printf("tab capture: capture surface resized to %dx%d", width, height)
+ }
++
++// browserChrome is how much of the window Chromium's own UI takes: the
++// window's outer size minus the page's inner size, measured with the device
++// emulation lifted (applyView sets it again right after).
++func (b *Controller) browserChrome(session string) (int, int) {
++	if session == "" {
++		return 0, 0
++	}
++	_, _ = b.cdp.Call(session, "Emulation.clearDeviceMetricsOverride", nil)
++	raw, err := b.cdp.Call(session, "Runtime.evaluate", map[string]any{
++		"expression":    "[outerWidth - innerWidth, outerHeight - innerHeight]",
++		"returnByValue": true,
++	})
++	if err != nil {
++		return 0, 0
++	}
++	var res struct {
++		Result struct {
++			Value []int `json:"value"`
++		} `json:"result"`
++	}
++	if json.Unmarshal(raw, &res) != nil || len(res.Result.Value) != 2 {
++		return 0, 0
++	}
++	w, h := res.Result.Value[0], res.Result.Value[1]
++	if w < 0 || w > 400 || h < 0 || h > 400 {
++		return 0, 0
++	}
++	return w, h
++}
+diff --git a/backend/internal/browser/tabs.go b/backend/internal/browser/tabs.go
+index ab9468f..87b4acb 100644
+--- a/backend/internal/browser/tabs.go
++++ b/backend/internal/browser/tabs.go
+@@ -630,7 +630,11 @@ func (b *Controller) applyView(t *Tab) {
+ 	// tabCapture reads Chromium's compositor surface, so its real headless
+ 	// window must follow the client too; otherwise Chromium scales a stale
+ 	// surface into the requested encoder dimensions and text becomes soft.
+-	b.resizeCaptureSurface(t.TargetID, pixelW, pixelH)
++	// Headless Chromium still lays out its tab strip and toolbar inside the
++	// window, so size the window for the page area, not the window, to be the
++	// client's (otherwise the stream is letterboxed: 960x401 in 960x544).
++	extraW, extraH := b.browserChrome(s)
++	b.resizeCaptureSurface(t.TargetID, pixelW+extraW, pixelH+extraH)
+ 	metrics := map[string]any{
+ 		"width": w, "height": h, "deviceScaleFactor": 1, "mobile": mobile,
+ 		"screenWidth": pixelW, "screenHeight": pixelH,
+-- 
+2.43.0
+
