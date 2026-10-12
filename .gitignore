@@ -10,3 +10,6 @@ vita/stats-listen.err
 vita/dump.h264
 vita/frame0.png
 vita-backup/
+vita/test-home/
+server/fit-window.log
+server/pair.log
