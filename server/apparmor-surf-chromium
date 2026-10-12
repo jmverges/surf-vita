@@ -1,0 +1,12 @@
+# Lets the Playwright Chromium used by the Surf server (~/surf-vita) create the
+# user namespaces its sandbox needs (Ubuntu restricts unprivileged userns).
+# Same shape as the stock /etc/apparmor.d/chrome profile.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile surf-chromium /home/jmverges/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome flags=(unconfined) {
+  userns,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/surf-chromium>
+}
