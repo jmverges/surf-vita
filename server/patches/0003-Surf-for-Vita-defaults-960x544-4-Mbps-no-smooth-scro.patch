@@ -1,0 +1,107 @@
+From c8b9bc1ae6bf2983759600d51a2a1543d2d4bab0 Mon Sep 17 00:00:00 2001
+From: jmverges <2902073+jmverges@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 05:40:30 +0000
+Subject: [PATCH 3/3] Surf for Vita defaults: 960x544, 4 Mbps, no smooth
+ scrolling, client-sized headless screen, updates from surf-vita
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ backend/internal/cdp/cdp.go            | 6 ++++++
+ backend/internal/cdp/cdp_test.go       | 4 ++--
+ backend/internal/config/config.go      | 7 ++++---
+ backend/internal/config/config_test.go | 4 ++--
+ backend/internal/updater/updater.go    | 4 +++-
+ 5 files changed, 17 insertions(+), 8 deletions(-)
+
+diff --git a/backend/internal/cdp/cdp.go b/backend/internal/cdp/cdp.go
+index bc3c676..74a32a7 100644
+--- a/backend/internal/cdp/cdp.go
++++ b/backend/internal/cdp/cdp.go
+@@ -161,8 +161,14 @@ func (cfg LaunchConfig) Args() []string {
+ 		// The caller still replaces the restored tab list with Surf's snapshot.
+ 		args = append(args, "--restore-last-session")
+ 	}
++	// Surf for Vita: the Vita scrolls with frequent wheel steps, and smooth
++	// scrolling made each step cut the previous one short (jerky, lost distance).
++	args = append(args, "--disable-smooth-scrolling")
+ 	if !cfg.Visible {
+ 		args = append(args, "--headless=new")
++		// Headless Chromium assumes an 800x600 screen; make it the client's so
++		// element fullscreen (a maximized video) fills exactly the stream.
++		args = append(args, fmt.Sprintf("--ozone-override-screen-size=%d,%d", cfg.W, cfg.H))
+ 	}
+ 	if cfg.Visible {
+ 		filtered := args[:0]
+diff --git a/backend/internal/cdp/cdp_test.go b/backend/internal/cdp/cdp_test.go
+index 36391f4..f7688de 100644
+--- a/backend/internal/cdp/cdp_test.go
++++ b/backend/internal/cdp/cdp_test.go
+@@ -49,8 +49,8 @@ func TestLaunchArgsSandboxDefault(t *testing.T) {
+ 			t.Fatalf("obsolete graphics bridge arg %q present: %v", obsolete, args)
+ 		}
+ 	}
+-	if hasArg(args, "--disable-smooth-scrolling") {
+-		t.Fatalf("obsolete scroll override present: %v", args)
++	if !hasArg(args, "--disable-smooth-scrolling") { // Surf for Vita: wheel-step scrolling
++		t.Fatalf("smooth scrolling not disabled: %v", args)
+ 	}
+ 	if hasArg(args, "--disable-component-update") ||
+ 		hasArg(args, "--disable-background-networking") {
+diff --git a/backend/internal/config/config.go b/backend/internal/config/config.go
+index f65d9c9..3640e07 100644
+--- a/backend/internal/config/config.go
++++ b/backend/internal/config/config.go
+@@ -153,8 +153,9 @@ func LoadForDoctor() (*Config, error) {
+ 
+ func load() (*Config, error) {
+ 	home := surfHome()
+-	viewW := envInt("VW", 768)
+-	viewH := envInt("VH", 934)
++	// Surf for Vita: the PS Vita's screen and a bitrate its 2.4 GHz Wi-Fi keeps up with.
++	viewW := envInt("VW", 960)
++	viewH := envInt("VH", 544)
+ 	cfg := &Config{
+ 		SurfHome:        home,
+ 		BindAddr:        envStr("BIND_ADDR", "0.0.0.0"),
+@@ -173,7 +174,7 @@ func load() (*Config, error) {
+ 		ContentBlocker:  envBool("SURF_CONTENT_BLOCKER", true),
+ 		AdaptiveVideo:   envBool("SURF_ADAPTIVE_VIDEO", false),
+ 		StreamScale:     envStr("STREAM_SCALE", ""),
+-		StreamBitrateK:  envInt("STREAM_BITRATE", 16000),
++		StreamBitrateK:  envInt("STREAM_BITRATE", 4000),
+ 		StreamQuantizer: envInt("STREAM_QUANTIZER", 12),
+ 	}
+ 	return cfg, nil
+diff --git a/backend/internal/config/config_test.go b/backend/internal/config/config_test.go
+index 06a186a..8ae68bc 100644
+--- a/backend/internal/config/config_test.go
++++ b/backend/internal/config/config_test.go
+@@ -72,8 +72,8 @@ func TestLoadDefaults(t *testing.T) {
+ 	if cfg.ChromeNoSandbox {
+ 		t.Fatal("ChromeNoSandbox=true")
+ 	}
+-	if cfg.StreamBitrateK != 16000 {
+-		t.Fatalf("StreamBitrateK=%d, want 16000", cfg.StreamBitrateK)
++	if cfg.StreamBitrateK != 4000 { // Surf for Vita default
++		t.Fatalf("StreamBitrateK=%d, want 4000", cfg.StreamBitrateK)
+ 	}
+ 	if cfg.StreamQuantizer != 12 {
+ 		t.Fatalf("StreamQuantizer=%d, want 12", cfg.StreamQuantizer)
+diff --git a/backend/internal/updater/updater.go b/backend/internal/updater/updater.go
+index 26d275f..28b0d28 100644
+--- a/backend/internal/updater/updater.go
++++ b/backend/internal/updater/updater.go
+@@ -21,7 +21,9 @@ import (
+ 	"time"
+ )
+ 
+-const DefaultManifestURL = "https://github.com/seg6/surf/releases/latest/download/update.json"
++// Surf for Vita: updates come from the Vita build's releases, so updating never
++// swaps in an upstream build without the Vita patches.
++const DefaultManifestURL = "https://github.com/jmverges/surf-vita/releases/latest/download/update.json"
+ 
+ type Asset struct {
+ 	Name   string `json:"name"`
+-- 
+2.43.0
+

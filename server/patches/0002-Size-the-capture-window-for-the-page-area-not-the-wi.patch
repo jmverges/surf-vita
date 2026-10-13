@@ -1,7 +1,7 @@
 From 140f45994c52319cb4aae67c630e268121feedbf Mon Sep 17 00:00:00 2001
 From: Juan Manuel Verges <juanmanuel.vergessolanas@gmail.com>
 Date: Mon, 12 Oct 2026 17:46:16 +0000
-Subject: [PATCH 2/2] Size the capture window for the page area, not the window
+Subject: [PATCH 2/3] Size the capture window for the page area, not the window
 
 Headless Chromium still lays out its tab strip and toolbar inside the window
 (143 px here), so a window sized to the client's viewport left a 960x401 page

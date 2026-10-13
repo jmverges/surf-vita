@@ -3,7 +3,8 @@
 cd "$(dirname "$0")"
 export SURF_HOME="$PWD/home" SURF_SERVER_NAME="UM880" PORT=18080 VW=960 VH=544 STREAM_BITRATE=4000
 export SURF_PUBLIC_ADDRESS="${SURF_PUBLIC_ADDRESS:-192.168.1.63:18080}"
-export CHROME="${CHROME:-$PWD/chrome-wrapper.sh}"
+# The Vita build passes its own Chromium flags; only point it at the Playwright Chromium.
+export CHROME="${CHROME:-/home/jmverges/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome}"
 # Surf 0.17.0 + vita-fixes (patches/): unrotated landscape, view re-applied on fullscreen,
 # window sized for the page area (headless Chromium's toolbar is inside the window).
 # Chromium sometimes dies on the first start after a restart ("browser connection
