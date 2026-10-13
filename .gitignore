@@ -5,7 +5,6 @@ server/serve.log
 server/surf-*/
 server/surf-vita-patched
 server/*.tar.gz
-upstream/
 vita-backup/
 vita/build/
 vita/build-real/
